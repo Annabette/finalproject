@@ -1,0 +1,146 @@
+#python findDots.py "file name.jpg"  "scale bar size in nanometers"
+#prints number of objects found, saves plot of labels,
+#saves (Xcm,Ycm,M) for each object found in [file name].data
+
+#imports
+from pylab import *
+from matplotlib import pyplot
+import Image as im
+from scipy import ndimage
+import sys
+import numpy as np
+from scipy.weave import inline
+
+#take image file from argument 1, takes scale bar number from argument 2
+imf  = sys.argv[1]
+scale= sys.argv[2]
+
+#imf = 'qd.jpg'
+fname= imf[:imf.index('.')]
+img  = im.open(imf)
+size = img.size
+box  = (0,0,size[0],int(size[1]*.94))
+imc  = img.crop(box)
+data = asarray(imc)
+tumb = imc.resize((int(size[0]*0.25),int(size[1]*0.25)), im.BILINEAR)
+tumd = asarray(tumb)
+
+def getT(data):
+  N = [ndimage.label(data>i)[1] for i in range(256)]
+	#plt.plot(range(256),N)
+	#plt.show()
+	cml = [x*m for m,x in enumerate(N)]
+	cm  = int(np.sum(cml)/np.sum(N))
+	return cm
+
+T = getT(tumd)
+
+#T = 50
+#gef = data
+
+gef = ndimage.gaussian_filter(data,size[0]*.002)
+lab,N = ndimage.label(gef>T)
+print N
+
+#imshow(lab)
+#savefig('%s_lab.png'%fname)
+#plt.clf()
+
+#put x,y and m in file
+def genPdictPy(lab):
+	Pdict = {i+1:[] for i in range(N)}
+	for i,r in enumerate(lab):
+		cut = np.where(r!=0)
+		for j in cut[0]:		
+			Pdict[lab[i,j]].append((i,j))
+	return Pdict
+
+Pdict = genPdictPy(lab)
+
+	
+def genPdictWeave2(lab):	
+	code = r'''
+    	py::list Plist;
+	for(int i=0; i<N;i++){
+		Plist.append([])	
+	}
+	 
+    	for(int i = 0; i < X; i++) {
+        	for(int j = 0; j < Y; j++) {
+			p = lab[i,j]			
+			if p != 0			
+			py::list r = [i,j];        	    
+			Plist[p-1].append(r);
+        	}
+    	}
+    	return_val = Plist;
+    	'''
+
+	X,Y=lab.shape
+	inline(code,['X','Y','Pdict','lab'])
+
+#Plist = genPdictWeave2(lab)
+#print Plist
+
+def Rcm(P):
+	P = np.array(P) 
+	x,y=P[:,0],P[:,1]	
+	M = len(x)
+	xcm = np.sum(x)/M
+	ycm = np.sum(y)/M
+	return (xcm,ycm,M)
+
+#D = [Rcm(np.where(lab==i)) for i+1 in range(N-1)]
+D = [Rcm(Pdict[i+1]) for i in range(N)]
+savetxt('%s.data'%fname,D,fmt='%i')
+
+
+
+#this part is going to crop the image and find the space from the sides so we can find area 
+box  = (int(size[0]*.40),int(size[1]*.94),int(size[0]*.99),int(size[1]*.965))
+corner  = img.crop(box)
+#pyplot.imshow(asarray(corner))
+#pyplot.show()
+
+#use edgefinder to find pixel number of scale bar
+bw=asarray(corner)
+
+def findFirst(bw):
+	for n in range(len(bw[0])):
+		if sum(bw[:,n])>800:
+			return n
+
+
+def findLast(bw):
+#	bwt=bw.transpose()
+	for n in range(len(bw[0])):
+		if sum(bw[:,-n])>800:
+			return len(bw[0])-n
+
+
+front=findFirst(bw)
+print front
+back=findLast(bw)
+print back
+pixNum=back-front
+print "scalebar pixel length: ",pixNum
+#convert pixel number to length in micrometers or nanometers
+pixLength=float(scale)/pixNum
+imWidth=size[0]*pixLength
+imLength=size[1]*.94*pixLength
+imArea=imLength*imWidth
+print "length,width: ",imLength,imWidth
+print imArea
+
+
+#for printing number of dots and area at top of data file
+f = open('%s.data'%fname)
+text = f.read()
+f.close()
+# open the file again for writing
+f = open('%s.data'%fname, 'w')
+f.write('%s\n %s\n' %(N,imArea))
+# write the original contents
+f.write(text)
+f.close()
+
